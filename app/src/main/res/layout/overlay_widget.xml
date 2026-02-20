@@ -1,0 +1,161 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.google.android.material.card.MaterialCardView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    app:cardBackgroundColor="@color/overlay_bg"
+    app:cardCornerRadius="28dp"
+    app:strokeColor="@color/overlay_border"
+    app:strokeWidth="1dp"
+    app:cardElevation="8dp">
+
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingHorizontal="8dp"
+        android:paddingVertical="6dp"
+        android:gravity="center_horizontal">
+
+        <!-- Main Controls Row -->
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <!-- Record Button -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnRecord"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:padding="0dp"
+                app:icon="@drawable/ic_record"
+                app:iconSize="22dp"
+                app:iconGravity="textStart"
+                app:iconPadding="0dp"
+                app:iconTint="@color/white"
+                app:backgroundTint="@color/accent_record"
+                app:cornerRadius="24dp"
+                app:shapeAppearanceOverlay="@null"
+                style="@style/Widget.MaterialComponents.Button.UnelevatedButton" />
+
+            <!-- Stop Button -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnStop"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:layout_marginStart="6dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:padding="0dp"
+                android:enabled="false"
+                app:icon="@drawable/ic_stop"
+                app:iconSize="22dp"
+                app:iconGravity="textStart"
+                app:iconPadding="0dp"
+                app:iconTint="@color/white"
+                app:backgroundTint="@color/accent_stop"
+                app:cornerRadius="24dp"
+                app:shapeAppearanceOverlay="@null"
+                style="@style/Widget.MaterialComponents.Button.UnelevatedButton" />
+
+            <!-- Play Button -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnPlay"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:layout_marginStart="6dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:padding="0dp"
+                app:icon="@drawable/ic_play"
+                app:iconSize="22dp"
+                app:iconGravity="textStart"
+                app:iconPadding="0dp"
+                app:iconTint="@color/white"
+                app:backgroundTint="@color/accent_play"
+                app:cornerRadius="24dp"
+                app:shapeAppearanceOverlay="@null"
+                style="@style/Widget.MaterialComponents.Button.UnelevatedButton" />
+
+            <!-- Loop Toggle -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnLoop"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:layout_marginStart="6dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:padding="0dp"
+                app:icon="@drawable/ic_loop"
+                app:iconSize="20dp"
+                app:iconGravity="textStart"
+                app:iconPadding="0dp"
+                app:iconTint="@color/text_muted"
+                app:backgroundTint="@color/surface_elevated"
+                app:cornerRadius="24dp"
+                app:shapeAppearanceOverlay="@null"
+                style="@style/Widget.MaterialComponents.Button.UnelevatedButton" />
+
+        </LinearLayout>
+
+        <!-- Speed indicator row -->
+        <LinearLayout
+            android:id="@+id/layoutSpeed"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginTop="4dp"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/tvSpeed"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="1.0×"
+                android:textColor="@color/accent_primary"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:layout_marginEnd="4dp" />
+
+            <!-- Speed Down -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnSpeedDown"
+                android:layout_width="30dp"
+                android:layout_height="30dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:padding="0dp"
+                android:text="−"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp"
+                app:backgroundTint="@color/surface_elevated"
+                app:cornerRadius="15dp"
+                style="@style/Widget.MaterialComponents.Button.UnelevatedButton" />
+
+            <!-- Speed Up -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnSpeedUp"
+                android:layout_width="30dp"
+                android:layout_height="30dp"
+                android:layout_marginStart="4dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:padding="0dp"
+                android:text="+"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp"
+                app:backgroundTint="@color/surface_elevated"
+                app:cornerRadius="15dp"
+                style="@style/Widget.MaterialComponents.Button.UnelevatedButton" />
+
+        </LinearLayout>
+
+    </LinearLayout>
+
+</com.google.android.material.card.MaterialCardView>

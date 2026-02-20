@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/accent_primary" />
+    <foreground>
+        <inset android:inset="25%">
+            <vector
+                android:width="108dp"
+                android:height="108dp"
+                android:viewportWidth="108"
+                android:viewportHeight="108">
+                <path
+                    android:fillColor="#FFFFFF"
+                    android:pathData="M54,24L54,84M24,54L84,54M38,38L70,70M70,38L38,70" 
+                    android:strokeWidth="6"
+                    android:strokeColor="#FFFFFF"/>
+            </vector>
+        </inset>
+    </foreground>
+</adaptive-icon>
