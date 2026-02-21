@@ -61,6 +61,8 @@ class OverlayService : Service() {
     private var isRecording = false
     private var isPlaying = false
     private var isPending = false // waiting for daemon ack
+    private var isCountingDown = false
+    private var countdownJob: Job? = null
     private var pendingTimeoutJob: Job? = null
     private var lastMacroPath: String? = null
 
@@ -346,6 +348,16 @@ class OverlayService : Service() {
     private fun onStopClicked() {
         if (!isDaemonConnected) return
 
+        if (isCountingDown) {
+            countdownJob?.cancel()
+            isCountingDown = false
+            isPending = false
+            binding?.tvCountdown?.visibility = View.GONE
+            updateButtonStates()
+            Toast.makeText(this, "Playback cancelled", Toast.LENGTH_SHORT).show()
+            return
+        }
+
         serviceScope.launch {
             if (isRecording) {
                 daemonClient.sendCommand("STOP_REC")
@@ -368,13 +380,7 @@ class OverlayService : Service() {
             return
         }
         lastMacroPath = macroPath
-        setPending(true)
-        updateButtonStates()
-        serviceScope.launch {
-            val speed = SPEED_OPTIONS[currentSpeedIndex]
-            daemonClient.sendCommand("SET_SPEED $speed")
-            daemonClient.sendCommand("PLAY $macroPath")
-        }
+        startPlaybackWithCountdown(macroPath, false)
     }
 
     private fun onPlayClicked() {
@@ -392,19 +398,34 @@ class OverlayService : Service() {
             return
         }
 
+        startPlaybackWithCountdown(macroFile, loopEnabled)
+    }
+
+    private fun startPlaybackWithCountdown(macroPath: String, isLoop: Boolean) {
         setPending(true)
+        isCountingDown = true
         updateButtonStates()
 
-        serviceScope.launch {
+        countdownJob = serviceScope.launch {
+            binding?.tvCountdown?.apply {
+                text = "1"
+                visibility = View.VISIBLE
+            }
+            
+            delay(1000)
+            
+            binding?.tvCountdown?.visibility = View.GONE
+            isCountingDown = false
+            // Don't clear isPending yet — wait for PLAY_STARTED ack from daemon
+
             // Send the current speed first
             val speed = SPEED_OPTIONS[currentSpeedIndex]
             daemonClient.sendCommand("SET_SPEED $speed")
 
-            // Use loop command if loop is enabled
-            val sent = if (loopEnabled) {
-                daemonClient.sendCommand("PLAY_LOOP 0 $macroFile")
+            val sent = if (isLoop) {
+                daemonClient.sendCommand("PLAY_LOOP 0 $macroPath")
             } else {
-                daemonClient.sendCommand("PLAY $macroFile")
+                daemonClient.sendCommand("PLAY $macroPath")
             }
 
             if (!sent) {
@@ -413,7 +434,6 @@ class OverlayService : Service() {
                 updateButtonStates()
                 Toast.makeText(this@OverlayService, "Lost connection to daemon", Toast.LENGTH_SHORT).show()
             }
-            // Don't set isPlaying=true here — wait for PLAY_STARTED ack
         }
     }
 
@@ -487,7 +507,7 @@ class OverlayService : Service() {
         binding?.apply {
             val canAct = isDaemonConnected && !isPending
             btnRecord.isEnabled = canAct && !isRecording && !isPlaying
-            btnStop.isEnabled = canAct && (isRecording || isPlaying)
+            btnStop.isEnabled = (canAct && (isRecording || isPlaying)) || (isDaemonConnected && isCountingDown)
             btnPlay.isEnabled = canAct && !isRecording && !isPlaying
             btnLoop.isEnabled = canAct && !isRecording && !isPlaying
 

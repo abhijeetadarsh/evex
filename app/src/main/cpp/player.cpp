@@ -3,20 +3,25 @@
 #include <android/log.h>
 #include <fcntl.h>
 #include <linux/input.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <cerrno>
 #include <cstring>
-#include <sys/stat.h>
+
 
 #define LOG_TAG "MacroDaemon"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 Player::Player() = default;
-Player::~Player() { stop(); }
+Player::~Player() {
+  stop();
+}
 
-void Player::setStatusCallback(StatusCallback cb) { statusCb_ = std::move(cb); }
+void Player::setStatusCallback(StatusCallback cb) {
+  statusCb_ = std::move(cb);
+}
 
 void Player::setSpeed(float speedMultiplier) {
   if (speedMultiplier > 0.0f && speedMultiplier <= 10.0f) {
@@ -25,7 +30,9 @@ void Player::setSpeed(float speedMultiplier) {
   }
 }
 
-float Player::getSpeed() const { return speed_; }
+float Player::getSpeed() const {
+  return speed_;
+}
 
 // Calculate time difference in microseconds between two input_event timestamps
 static long long timeDiffUs(const struct input_event &a,
@@ -40,8 +47,7 @@ bool Player::play(const std::string &devicePath, const std::string &macroFile,
   // Validate macro file exists before doing anything
   if (access(macroFile.c_str(), F_OK) != 0) {
     LOGE("Macro file does not exist: %s", macroFile.c_str());
-    if (statusCb_)
-      statusCb_("ERROR Macro file not found: " + macroFile);
+    if (statusCb_) statusCb_("ERROR Macro file not found: " + macroFile);
     return false;
   }
 
@@ -51,8 +57,7 @@ bool Player::play(const std::string &devicePath, const std::string &macroFile,
       fileStat.st_size < (off_t)sizeof(struct input_event)) {
     LOGE("Macro file is empty or corrupted: %s (%ld bytes)", macroFile.c_str(),
          (long)fileStat.st_size);
-    if (statusCb_)
-      statusCb_("ERROR Macro file is empty or corrupted");
+    if (statusCb_) statusCb_("ERROR Macro file is empty or corrupted");
     return false;
   }
 
@@ -61,16 +66,14 @@ bool Player::play(const std::string &devicePath, const std::string &macroFile,
   if (devFd < 0) {
     LOGE("Failed to open device %s for writing: %s", devicePath.c_str(),
          strerror(errno));
-    if (statusCb_)
-      statusCb_("ERROR Failed to open device for writing");
+    if (statusCb_) statusCb_("ERROR Failed to open device for writing");
     return false;
   }
 
   playing_ = true;
   LOGI("Playback started: %s -> %s (loops=%d, speed=%.2f)", macroFile.c_str(),
        devicePath.c_str(), loopCount, speed_.load());
-  if (statusCb_)
-    statusCb_("PLAY_STARTED");
+  if (statusCb_) statusCb_("PLAY_STARTED");
 
   int iteration = 0;
   bool infinite = (loopCount == 0);
@@ -81,8 +84,7 @@ bool Player::play(const std::string &devicePath, const std::string &macroFile,
     if (fileFd < 0) {
       LOGE("Failed to open macro file %s: %s", macroFile.c_str(),
            strerror(errno));
-      if (statusCb_)
-        statusCb_("ERROR Failed to open macro file");
+      if (statusCb_) statusCb_("ERROR Failed to open macro file");
       break;
     }
 
@@ -101,7 +103,7 @@ bool Player::play(const std::string &devicePath, const std::string &macroFile,
       // Replicate the original timing, adjusted for speed
       if (!firstEvent) {
         long long delayUs = timeDiffUs(prevEv, ev);
-        if (delayUs > 0 && delayUs < 10000000LL) { // Cap at 10 seconds
+        if (delayUs > 0 && delayUs < 10000000LL) {  // Cap at 10 seconds
           // Apply speed multiplier: higher speed = shorter delay
           float currentSpeed = speed_.load();
           long long adjustedDelay =
@@ -112,6 +114,10 @@ bool Player::play(const std::string &devicePath, const std::string &macroFile,
         }
       }
 
+      // Save the original event (with its valid timestamp) for the next
+      // iteration
+      prevEv = ev;
+
       // Clear the timestamp before injecting — let the kernel set it
       ev.time.tv_sec = 0;
       ev.time.tv_usec = 0;
@@ -121,7 +127,6 @@ bool Player::play(const std::string &devicePath, const std::string &macroFile,
         LOGE("Failed to write event: %s", strerror(errno));
       }
 
-      prevEv = ev;
       firstEvent = false;
       eventCount++;
     }
@@ -136,7 +141,7 @@ bool Player::play(const std::string &devicePath, const std::string &macroFile,
       }
       LOGI("Loop iteration %d completed (%ld events)", iteration, eventCount);
       // Small pause between loops
-      usleep(100000); // 100ms
+      usleep(100000);  // 100ms
     } else {
       LOGI("Playback iteration %d finished. %ld events replayed.", iteration,
            eventCount);
@@ -148,15 +153,17 @@ bool Player::play(const std::string &devicePath, const std::string &macroFile,
   playing_ = false;
 
   if (wasStopped) {
-    if (statusCb_)
-      statusCb_("PLAY_STOPPED");
+    if (statusCb_) statusCb_("PLAY_STOPPED");
   } else {
-    if (statusCb_)
-      statusCb_("PLAY_DONE");
+    if (statusCb_) statusCb_("PLAY_DONE");
   }
   return true;
 }
 
-void Player::stop() { playing_ = false; }
+void Player::stop() {
+  playing_ = false;
+}
 
-bool Player::isPlaying() const { return playing_; }
+bool Player::isPlaying() const {
+  return playing_;
+}
