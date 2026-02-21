@@ -13,7 +13,9 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 Recorder::Recorder() = default;
-Recorder::~Recorder() { stop(); }
+Recorder::~Recorder() {
+  stop();
+}
 
 void Recorder::setStatusCallback(StatusCallback cb) {
   statusCb_ = std::move(cb);
@@ -26,8 +28,7 @@ bool Recorder::start(const std::string &devicePath,
   if (inputFd < 0) {
     LOGE("Failed to open input device %s: %s", devicePath.c_str(),
          strerror(errno));
-    if (statusCb_)
-      statusCb_("ERROR Failed to open input device");
+    if (statusCb_) statusCb_("ERROR Failed to open input device");
     return false;
   }
 
@@ -37,15 +38,13 @@ bool Recorder::start(const std::string &devicePath,
     LOGE("Failed to create output file %s: %s", outputFile.c_str(),
          strerror(errno));
     close(inputFd);
-    if (statusCb_)
-      statusCb_("ERROR Failed to create output file");
+    if (statusCb_) statusCb_("ERROR Failed to create output file");
     return false;
   }
 
   recording_ = true;
   LOGI("Recording started: %s -> %s", devicePath.c_str(), outputFile.c_str());
-  if (statusCb_)
-    statusCb_("REC_STARTED");
+  if (statusCb_) statusCb_("REC_STARTED");
 
   struct input_event ev;
   long eventCount = 0;
@@ -58,47 +57,52 @@ bool Recorder::start(const std::string &devicePath,
 
     struct timeval timeout;
     timeout.tv_sec = 0;
-    timeout.tv_usec = 100000; // 100ms timeout for checking stop flag
+    timeout.tv_usec = 100000;  // 100ms timeout for checking stop flag
 
     int ret = select(inputFd + 1, &readfds, nullptr, nullptr, &timeout);
     if (ret < 0) {
-      if (errno == EINTR)
-        continue;
+      if (errno == EINTR) continue;
       LOGE("select() error: %s", strerror(errno));
       break;
     }
 
-    if (ret == 0)
-      continue; // Timeout — loop back to check recording_ flag
+    if (ret == 0) continue;  // Timeout — loop back to check recording_ flag
 
     ssize_t n = read(inputFd, &ev, sizeof(ev));
     if (n == sizeof(ev)) {
       write(outFd, &ev, sizeof(ev));
       eventCount++;
 
+      // Notify on first event so UI can start the timer
+      if (eventCount == 1 && statusCb_) {
+        statusCb_("REC_FIRST_EVENT");
+      }
+
       // Flush to disk every 100 events to prevent data loss on kill
       if (eventCount % 100 == 0) {
         fsync(outFd);
       }
     } else if (n < 0) {
-      if (errno == EINTR)
-        continue;
+      if (errno == EINTR) continue;
       LOGE("Read error: %s", strerror(errno));
       break;
     }
   }
 
-  fsync(outFd); // Final flush before close
+  fsync(outFd);  // Final flush before close
   close(inputFd);
   close(outFd);
   recording_ = false;
 
   LOGI("Recording stopped. %ld events captured.", eventCount);
-  if (statusCb_)
-    statusCb_("REC_STOPPED");
+  if (statusCb_) statusCb_("REC_STOPPED");
   return true;
 }
 
-void Recorder::stop() { recording_ = false; }
+void Recorder::stop() {
+  recording_ = false;
+}
 
-bool Recorder::isRecording() const { return recording_; }
+bool Recorder::isRecording() const {
+  return recording_;
+}

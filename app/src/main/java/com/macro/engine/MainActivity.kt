@@ -33,6 +33,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var macroAdapter: MacroAdapter
     private val daemonClient = DaemonClient()
     private var daemonConnected = false
+    private var autoStartingOverlay = false // flag to prevent listener re-trigger
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -71,6 +72,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupListeners() {
         binding.switchOverlay.setOnCheckedChangeListener { _, isChecked ->
+            if (autoStartingOverlay) return@setOnCheckedChangeListener
             if (isChecked) {
                 startOverlayService()
             } else {
@@ -155,7 +157,6 @@ class MainActivity : AppCompatActivity() {
 
         // Step 4: Check overlay permission
         if (!Settings.canDrawOverlays(this)) {
-            binding.switchOverlay.isEnabled = false
             Toast.makeText(this, getString(R.string.overlay_permission_needed), Toast.LENGTH_LONG).show()
             requestOverlayPermission()
         }
@@ -219,8 +220,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun playMacro(file: File) {
-        // Route through OverlayService — MainActivity's daemonClient is disconnected.
-        // The OverlayService holds the sole daemon connection.
+        // Ensure overlay service is running before sending the play intent
+        if (!Settings.canDrawOverlays(this)) {
+            Toast.makeText(this, getString(R.string.overlay_permission_needed), Toast.LENGTH_LONG).show()
+            requestOverlayPermission()
+            return
+        }
+
+        // Start overlay service first (idempotent if already running)
+        startOverlayService()
+
+        // Then send the play command
         val intent = Intent(this, OverlayService::class.java).apply {
             action = "ACTION_PLAY_FILE"
             putExtra("macro_path", file.absolutePath)
@@ -244,13 +254,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun startOverlayService() {
         if (!Settings.canDrawOverlays(this)) {
-            binding.switchOverlay.isChecked = false
             requestOverlayPermission()
             return
         }
 
         val intent = Intent(this, OverlayService::class.java)
         startForegroundService(intent)
+        // Update switch without triggering listener
+        autoStartingOverlay = true
+        binding.switchOverlay.isChecked = true
+        autoStartingOverlay = false
         Log.i(TAG, "Overlay service started")
     }
 
@@ -271,7 +284,6 @@ class MainActivity : AppCompatActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == OVERLAY_PERMISSION_REQUEST) {
-            binding.switchOverlay.isEnabled = Settings.canDrawOverlays(this)
             if (Settings.canDrawOverlays(this)) {
                 Toast.makeText(this, "Overlay permission granted", Toast.LENGTH_SHORT).show()
             }

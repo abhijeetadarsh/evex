@@ -62,8 +62,12 @@ class OverlayService : Service() {
     private var isPlaying = false
     private var isPending = false // waiting for daemon ack
     private var isCountingDown = false
+    private var isWaitingForTouch = false
+    private var isRecordingPaused = false
     private var countdownJob: Job? = null
     private var pendingTimeoutJob: Job? = null
+    private var recTimerJob: Job? = null
+    private var recStartTimeMs: Long = 0
     private var lastMacroPath: String? = null
 
     // Improvement features
@@ -98,13 +102,20 @@ class OverlayService : Service() {
                 if (path != null) playFile(path)
             }
         }
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // App swiped from recents — stop the service cleanly
+        stopSelf()
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onDestroy() {
         unregisterVolumeKeyListener()
+        recTimerJob?.cancel()
         removeOverlay()
         serviceScope.launch {
             daemonClient.disconnect()
@@ -152,6 +163,11 @@ class OverlayService : Service() {
             }
             btnSpeedDown.setOnClickListener { adjustSpeed(-1) }
             btnSpeedUp.setOnClickListener { adjustSpeed(1) }
+
+            // Recording flow buttons
+            tvDone.setOnClickListener { onDoneClicked() }
+            btnCancel.setOnClickListener { onCancelClicked() }
+            btnSave.setOnClickListener { onSaveClicked() }
         }
 
         windowManager.addView(overlayView, params)
@@ -256,8 +272,15 @@ class OverlayService : Service() {
     private fun handleDaemonStatus(status: String) {
         Log.d(TAG, "Daemon status: $status")
         when {
+            status.startsWith("REC_FIRST_EVENT") -> {
+                // First input event captured — NOW show timer UI
+                isWaitingForTouch = false
+                binding?.tvTapToStart?.visibility = View.GONE
+                showRecordingUI()
+                updateButtonStates()
+            }
             status.startsWith("REC_STARTED") -> {
-                // Daemon confirmed recording — NOW update UI
+                // Daemon confirmed recording — mark as active, keep "Tap to start" visible
                 setPending(false)
                 isRecording = true
                 updateButtonStates()
@@ -266,6 +289,7 @@ class OverlayService : Service() {
             status.startsWith("REC_STOPPED") -> {
                 isRecording = false
                 setPending(false)
+                // Don't reset UI here — let Done/Cancel/Save handle it
                 updateButtonStates()
                 updateNotification()
             }
@@ -294,8 +318,11 @@ class OverlayService : Service() {
             status.startsWith("ERROR") -> {
                 isRecording = false
                 isPlaying = false
+                isWaitingForTouch = false
+                isRecordingPaused = false
                 setPending(false)
                 setOverlayTouchPassthrough(false)
+                resetOverlayUI()
                 updateButtonStates()
                 updateNotification()
                 Toast.makeText(this, status, Toast.LENGTH_SHORT).show()
@@ -323,29 +350,147 @@ class OverlayService : Service() {
     }
 
     private fun onRecordClicked() {
-        if (!isDaemonConnected || isRecording || isPlaying || isPending) return
+        if (!isDaemonConnected || isRecording || isPlaying || isPending || isWaitingForTouch || isRecordingPaused) return
 
         val macroDir = getMacroDir()
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
         val macroPath = File(macroDir, "macro_$timestamp.bin").absolutePath
         lastMacroPath = macroPath
 
+        // Start daemon recording IMMEDIATELY so it captures the first tap
+        // The daemon reads from /dev/input/eventX at kernel level, so
+        // ALL touches are captured regardless of any overlay windows.
         setPending(true)
+        isWaitingForTouch = true
+        binding?.tvTapToStart?.visibility = View.VISIBLE
         updateButtonStates()
 
         serviceScope.launch {
             val sent = daemonClient.sendCommand("START_REC $macroPath")
             if (!sent) {
                 isPending = false
+                isWaitingForTouch = false
                 isDaemonConnected = false
+                binding?.tvTapToStart?.visibility = View.GONE
                 updateButtonStates()
                 Toast.makeText(this@OverlayService, "Lost connection to daemon", Toast.LENGTH_SHORT).show()
             }
-            // Don't set isRecording=true here — wait for REC_STARTED ack
+            // REC_STARTED handler will transition to timer UI
+        }
+    }
+
+    // ─── Recording Timer & UI ────────────────────────────────────
+
+    private fun showRecordingUI() {
+        recStartTimeMs = System.currentTimeMillis()
+        binding?.apply {
+            tvTapToStart.visibility = View.GONE
+            layoutRecording.visibility = View.VISIBLE
+            layoutRecActions.visibility = View.GONE
+            tvRecStatus.text = "● Rec 00:00"
+        }
+        // Start timer
+        recTimerJob?.cancel()
+        recTimerJob = serviceScope.launch {
+            while (isActive && isRecording) {
+                val elapsed = (System.currentTimeMillis() - recStartTimeMs) / 1000
+                val mins = elapsed / 60
+                val secs = elapsed % 60
+                binding?.tvRecStatus?.text = "● Rec %02d:%02d".format(mins, secs)
+                delay(1000)
+            }
+        }
+    }
+
+    private fun onDoneClicked() {
+        if (!isRecording) return
+
+        // Stop the daemon recording
+        serviceScope.launch {
+            daemonClient.sendCommand("STOP_REC")
+        }
+        recTimerJob?.cancel()
+        isRecording = false
+        isRecordingPaused = true
+
+        // Show Cancel / Save
+        showRecActionsUI()
+        updateButtonStates()
+        updateNotification()
+    }
+
+    private fun showRecActionsUI() {
+        binding?.apply {
+            layoutRecording.visibility = View.GONE
+            layoutRecActions.visibility = View.VISIBLE
+        }
+    }
+
+    private fun onCancelClicked() {
+        // Show confirmation dialog using a toast-like approach since we're a service
+        // We need a themed context for AlertDialog
+        val themedContext = ContextThemeWrapper(this, R.style.Theme_MacroEngine)
+        val dialog = android.app.AlertDialog.Builder(themedContext, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Discard Recording?")
+            .setMessage("This will delete the recorded macro.")
+            .setPositiveButton("Discard") { _, _ ->
+                // Delete the recorded file
+                lastMacroPath?.let { path ->
+                    val file = File(path)
+                    if (file.exists()) file.delete()
+                }
+                isRecordingPaused = false
+                resetOverlayUI()
+                updateButtonStates()
+                updateNotification()
+                Toast.makeText(this, "Recording discarded", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Keep", null)
+            .create()
+
+        // Service dialogs need TYPE_APPLICATION_OVERLAY
+        dialog.window?.setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
+        dialog.show()
+    }
+
+    private fun onSaveClicked() {
+        isRecordingPaused = false
+        resetOverlayUI()
+        updateButtonStates()
+        updateNotification()
+        Toast.makeText(this, "Macro saved", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun resetOverlayUI() {
+        binding?.apply {
+            tvTapToStart.visibility = View.GONE
+            layoutRecording.visibility = View.GONE
+            layoutRecActions.visibility = View.GONE
         }
     }
 
     private fun onStopClicked() {
+        if (isWaitingForTouch) {
+            // Cancel the "waiting for touch" state — also stop the daemon recording
+            isWaitingForTouch = false
+            binding?.tvTapToStart?.visibility = View.GONE
+
+            // Stop daemon recording and delete the empty file
+            serviceScope.launch {
+                daemonClient.sendCommand("STOP_REC")
+            }
+            lastMacroPath?.let { path ->
+                val file = File(path)
+                if (file.exists()) file.delete()
+            }
+            isRecording = false
+            isPending = false
+            updateButtonStates()
+            updateNotification()
+            Toast.makeText(this, "Recording cancelled", Toast.LENGTH_SHORT).show()
+            return
+        }
+
         if (!isDaemonConnected) return
 
         if (isCountingDown) {
@@ -505,11 +650,14 @@ class OverlayService : Service() {
 
     private fun updateButtonStates() {
         binding?.apply {
-            val canAct = isDaemonConnected && !isPending
-            btnRecord.isEnabled = canAct && !isRecording && !isPlaying
-            btnStop.isEnabled = (canAct && (isRecording || isPlaying)) || (isDaemonConnected && isCountingDown)
-            btnPlay.isEnabled = canAct && !isRecording && !isPlaying
-            btnLoop.isEnabled = canAct && !isRecording && !isPlaying
+            val canAct = isDaemonConnected && !isPending && !isRecordingPaused
+            val idle = !isRecording && !isPlaying && !isWaitingForTouch && !isRecordingPaused
+            btnRecord.isEnabled = canAct && idle
+            btnStop.isEnabled = (canAct && (isRecording || isPlaying))
+                || (isDaemonConnected && isCountingDown)
+                || isWaitingForTouch
+            btnPlay.isEnabled = canAct && idle
+            btnLoop.isEnabled = canAct && idle
 
             btnRecord.alpha = if (btnRecord.isEnabled) 1.0f else 0.4f
             btnStop.alpha = if (btnStop.isEnabled) 1.0f else 0.4f
