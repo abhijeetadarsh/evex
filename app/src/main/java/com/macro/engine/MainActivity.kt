@@ -52,6 +52,8 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         refreshMacroList()
+        // Re-activate any enabled triggers in the overlay service
+        reactivateEnabledTriggers()
     }
 
     override fun onDestroy() {
@@ -61,7 +63,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupRecyclerView() {
         macroAdapter = MacroAdapter(
-            onPlayClick = { file -> playMacro(file) },
+            onActivateClick = { file, enabled -> activateMacro(file, enabled) },
+            onConfigClick = { file -> openMacroConfig(file) },
             onDeleteClick = { file -> deleteMacro(file) }
         )
         binding.rvMacros.apply {
@@ -219,33 +222,61 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun playMacro(file: File) {
-        // Ensure overlay service is running before sending the play intent
+    /** If any macros have enabled triggers, start the service and refresh triggers */
+    private fun reactivateEnabledTriggers() {
+        if (!Settings.canDrawOverlays(this)) return
+
+        val macroDir = File(filesDir, "macros")
+        val hasEnabledTriggers = macroDir.listFiles()?.any { file ->
+            file.extension == "bin" && MacroConfig.load(file).trigger?.enabled == true
+        } ?: false
+
+        if (hasEnabledTriggers) {
+            val intent = Intent(this, OverlayService::class.java).apply {
+                action = "ACTION_REFRESH_TRIGGERS"
+            }
+            startForegroundService(intent)
+        }
+    }
+
+    private fun openMacroConfig(file: File) {
+        val intent = Intent(this, MacroConfigActivity::class.java).apply {
+            putExtra(MacroConfigActivity.EXTRA_MACRO_PATH, file.absolutePath)
+        }
+        startActivity(intent)
+    }
+
+    /** Activate/deactivate macro trigger — sends intent to OverlayService */
+    private fun activateMacro(file: File, enable: Boolean) {
         if (!Settings.canDrawOverlays(this)) {
             Toast.makeText(this, getString(R.string.overlay_permission_needed), Toast.LENGTH_LONG).show()
             requestOverlayPermission()
             return
         }
 
-        // Start overlay service first (idempotent if already running)
-        startOverlayService()
-
-        // Then send the play command
         val intent = Intent(this, OverlayService::class.java).apply {
-            action = "ACTION_PLAY_FILE"
+            action = "ACTION_ACTIVATE_TRIGGER"
             putExtra("macro_path", file.absolutePath)
+            putExtra("enable", enable)
         }
         startForegroundService(intent)
-        Toast.makeText(this, "Playing: ${file.nameWithoutExtension}", Toast.LENGTH_SHORT).show()
     }
 
     private fun deleteMacro(file: File) {
+        val config = MacroConfig.load(file)
+        val displayName = if (config.name.isNotBlank()) config.name else file.nameWithoutExtension
         AlertDialog.Builder(this)
             .setTitle("Delete Macro")
-            .setMessage("Delete ${file.nameWithoutExtension}?")
+            .setMessage("Delete $displayName?")
             .setPositiveButton("Delete") { _, _ ->
+                MacroConfig.delete(file)  // Delete sidecar JSON first
                 file.delete()
                 refreshMacroList()
+                // Refresh triggers in case this macro had one
+                val refreshIntent = Intent(this, OverlayService::class.java).apply {
+                    action = "ACTION_REFRESH_TRIGGERS"
+                }
+                startService(refreshIntent)
                 Toast.makeText(this, "Deleted", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("Cancel", null)

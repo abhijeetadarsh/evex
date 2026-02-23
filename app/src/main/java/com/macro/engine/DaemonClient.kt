@@ -67,7 +67,12 @@ class DaemonClient {
      */
     suspend fun sendCommand(command: String): Boolean = withContext(Dispatchers.IO) {
         try {
-            writer?.println(command)
+            val w = writer
+            if (w == null) {
+                Log.w(TAG, "Cannot send command (not connected): $command")
+                return@withContext false
+            }
+            w.println(command)
             Log.d(TAG, "Sent: $command")
             true
         } catch (e: Exception) {

@@ -41,12 +41,8 @@ class OverlayService : Service() {
         private const val NOTIFICATION_ID = 1001
 
         // Notification action intents
-        const val ACTION_PLAY = "com.macro.engine.ACTION_PLAY"
         const val ACTION_STOP = "com.macro.engine.ACTION_STOP"
         const val ACTION_RECORD = "com.macro.engine.ACTION_RECORD"
-
-        // Speed presets
-        private val SPEED_OPTIONS = floatArrayOf(0.25f, 0.5f, 0.75f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f)
     }
 
     private lateinit var windowManager: WindowManager
@@ -70,14 +66,12 @@ class OverlayService : Service() {
     private var recStartTimeMs: Long = 0
     private var lastMacroPath: String? = null
 
-    // Improvement features
-    private var loopEnabled = false
-    private var currentSpeedIndex = 3 // index into SPEED_OPTIONS, starts at 1.0x
-    private var speedControlsVisible = false
+
 
     // Volume key handling
     private var volumeKeyReceiver: BroadcastReceiver? = null
     private var audioManager: AudioManager? = null
+    private var triggerManager: TriggerOverlayManager? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -85,21 +79,33 @@ class OverlayService : Service() {
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, createNotification())
-        showOverlay()
+        // Init trigger manager immediately so triggers can be shown before daemon connects
+        triggerManager = TriggerOverlayManager(this, windowManager, daemonClient, serviceScope)
         connectToDaemon()
         registerVolumeKeyListener()
     }
 
+    private fun initTriggerManager() {
+        // Load all triggers for macros with enabled trigger configs
+        triggerManager?.loadAllTriggers(getMacroDir())
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // Handle notification action intents
         when (intent?.action) {
-            ACTION_PLAY -> onPlayClicked()
             ACTION_STOP -> onStopClicked()
             ACTION_RECORD -> onRecordClicked()
-            "ACTION_PLAY_FILE" -> {
-                // Play request from saved macros list in MainActivity
+            "ACTION_ACTIVATE_TRIGGER" -> {
+                // Only show trigger — no recording overlay
                 val path = intent.getStringExtra("macro_path")
-                if (path != null) playFile(path)
+                val enable = intent.getBooleanExtra("enable", true)
+                if (path != null) setTrigger(path, enable)
+            }
+            "ACTION_REFRESH_TRIGGERS" -> {
+                triggerManager?.loadAllTriggers(getMacroDir())
+            }
+            else -> {
+                // No action = started from overlay switch — show recording overlay
+                if (overlayView == null) showOverlay()
             }
         }
         return START_NOT_STICKY
@@ -115,6 +121,7 @@ class OverlayService : Service() {
 
     override fun onDestroy() {
         unregisterVolumeKeyListener()
+        triggerManager?.removeAll()
         recTimerJob?.cancel()
         removeOverlay()
         serviceScope.launch {
@@ -153,16 +160,6 @@ class OverlayService : Service() {
         binding?.apply {
             btnRecord.setOnClickListener { onRecordClicked() }
             btnStop.setOnClickListener { onStopClicked() }
-            btnPlay.setOnClickListener { onPlayClicked() }
-            btnLoop.setOnClickListener { toggleLoop() }
-
-            // Speed controls
-            btnPlay.setOnLongClickListener {
-                toggleSpeedControls()
-                true
-            }
-            btnSpeedDown.setOnClickListener { adjustSpeed(-1) }
-            btnSpeedUp.setOnClickListener { adjustSpeed(1) }
 
             // Recording flow buttons
             tvDone.setOnClickListener { onDoneClicked() }
@@ -247,6 +244,7 @@ class OverlayService : Service() {
                 Log.i(TAG, "Connected to daemon")
                 daemonClient.onStatusReceived = { status -> handleDaemonStatus(status) }
                 listenerJob = daemonClient.startListening(serviceScope)
+                initTriggerManager()
                 // Listener ending means connection dropped
                 listenerJob?.invokeOnCompletion {
                     isDaemonConnected = false
@@ -405,6 +403,9 @@ class OverlayService : Service() {
     private fun onDoneClicked() {
         if (!isRecording) return
 
+        // Calculate recording duration before stopping
+        val durationMs = System.currentTimeMillis() - recStartTimeMs
+
         // Stop the daemon recording
         serviceScope.launch {
             daemonClient.sendCommand("STOP_REC")
@@ -412,6 +413,15 @@ class OverlayService : Service() {
         recTimerJob?.cancel()
         isRecording = false
         isRecordingPaused = true
+
+        // Save duration to config
+        lastMacroPath?.let { path ->
+            val binFile = File(path)
+            if (binFile.exists()) {
+                val config = MacroConfig.load(binFile)
+                MacroConfig.save(binFile, config.copy(durationMs = durationMs))
+            }
+        }
 
         // Show Cancel / Save
         showRecActionsUI()
@@ -514,104 +524,36 @@ class OverlayService : Service() {
         }
     }
 
-    /** Play a specific file — called from saved macros list via Intent */
-    private fun playFile(macroPath: String) {
-        if (!isDaemonConnected || isRecording || isPlaying || isPending) {
-            Toast.makeText(this, "Cannot play right now", Toast.LENGTH_SHORT).show()
-            return
-        }
-        if (!File(macroPath).exists()) {
-            Toast.makeText(this, "Macro file not found", Toast.LENGTH_SHORT).show()
-            return
-        }
-        lastMacroPath = macroPath
-        startPlaybackWithCountdown(macroPath, false)
-    }
+    // ─── Trigger Activation ────────────────────────────────────────
 
-    private fun onPlayClicked() {
-        if (!isDaemonConnected || isRecording || isPlaying || isPending) return
-
-        val macroFile = lastMacroPath ?: getLatestMacroFile()
-        if (macroFile == null) {
-            Toast.makeText(this, "No macros recorded yet", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        // Verify the file actually exists before asking daemon to play it
-        if (!File(macroFile).exists()) {
+    /** Enable or disable a trigger button — called from macro list switch */
+    private fun setTrigger(macroPath: String, enable: Boolean) {
+        val binFile = File(macroPath)
+        if (!binFile.exists()) {
             Toast.makeText(this, "Macro file not found", Toast.LENGTH_SHORT).show()
             return
         }
 
-        startPlaybackWithCountdown(macroFile, loopEnabled)
-    }
-
-    private fun startPlaybackWithCountdown(macroPath: String, isLoop: Boolean) {
-        setPending(true)
-        isCountingDown = true
-        updateButtonStates()
-
-        countdownJob = serviceScope.launch {
-            binding?.tvCountdown?.apply {
-                text = "1"
-                visibility = View.VISIBLE
-            }
-            
-            delay(1000)
-            
-            binding?.tvCountdown?.visibility = View.GONE
-            isCountingDown = false
-            // Don't clear isPending yet — wait for PLAY_STARTED ack from daemon
-
-            // Send the current speed first
-            val speed = SPEED_OPTIONS[currentSpeedIndex]
-            daemonClient.sendCommand("SET_SPEED $speed")
-
-            val sent = if (isLoop) {
-                daemonClient.sendCommand("PLAY_LOOP 0 $macroPath")
-            } else {
-                daemonClient.sendCommand("PLAY $macroPath")
-            }
-
-            if (!sent) {
-                isPending = false
-                isDaemonConnected = false
-                updateButtonStates()
-                Toast.makeText(this@OverlayService, "Lost connection to daemon", Toast.LENGTH_SHORT).show()
-            }
+        val manager = triggerManager
+        if (manager == null) {
+            Toast.makeText(this, "Service not ready", Toast.LENGTH_SHORT).show()
+            return
         }
-    }
 
-    // ─── Loop & Speed ────────────────────────────────────────────
+        // Always remove existing trigger first
+        manager.removeTrigger(macroPath)
 
-    private fun toggleLoop() {
-        loopEnabled = !loopEnabled
-        binding?.btnLoop?.apply {
-            iconTint = android.content.res.ColorStateList.valueOf(
-                getColor(if (loopEnabled) R.color.accent_primary else R.color.text_muted)
-            )
-        }
-        Toast.makeText(this, if (loopEnabled) "Loop: ON" else "Loop: OFF", Toast.LENGTH_SHORT).show()
-    }
+        // Update config
+        var config = MacroConfig.load(binFile)
+        val trigger = (config.trigger ?: TriggerConfig()).copy(enabled = enable)
+        config = config.copy(trigger = trigger)
+        MacroConfig.save(binFile, config)
 
-    private fun toggleSpeedControls() {
-        speedControlsVisible = !speedControlsVisible
-        binding?.layoutSpeed?.visibility = if (speedControlsVisible) View.VISIBLE else View.GONE
-    }
-
-    private fun adjustSpeed(delta: Int) {
-        val newIndex = (currentSpeedIndex + delta).coerceIn(0, SPEED_OPTIONS.size - 1)
-        if (newIndex == currentSpeedIndex) return
-        currentSpeedIndex = newIndex
-
-        val speed = SPEED_OPTIONS[currentSpeedIndex]
-        binding?.tvSpeed?.text = "${speed}×"
-
-        // If currently playing, update speed in real-time
-        if (isPlaying) {
-            serviceScope.launch {
-                daemonClient.sendCommand("SET_SPEED $speed")
-            }
+        if (enable) {
+            manager.showTrigger(binFile, config)
+            Toast.makeText(this, "Trigger enabled", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(this, "Trigger disabled", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -650,19 +592,17 @@ class OverlayService : Service() {
 
     private fun updateButtonStates() {
         binding?.apply {
-            val canAct = isDaemonConnected && !isPending && !isRecordingPaused
-            val idle = !isRecording && !isPlaying && !isWaitingForTouch && !isRecordingPaused
-            btnRecord.isEnabled = canAct && idle
-            btnStop.isEnabled = (canAct && (isRecording || isPlaying))
-                || (isDaemonConnected && isCountingDown)
-                || isWaitingForTouch
-            btnPlay.isEnabled = canAct && idle
-            btnLoop.isEnabled = canAct && idle
+            val idle = !isRecording && !isPlaying && !isWaitingForTouch
+                && !isRecordingPaused && !isCountingDown && !isPending
+            val active = isRecording || isPlaying || isCountingDown || isWaitingForTouch
 
+            // Record: visible only when idle
+            btnRecord.visibility = if (idle) View.VISIBLE else View.GONE
+            btnRecord.isEnabled = isDaemonConnected
             btnRecord.alpha = if (btnRecord.isEnabled) 1.0f else 0.4f
-            btnStop.alpha = if (btnStop.isEnabled) 1.0f else 0.4f
-            btnPlay.alpha = if (btnPlay.isEnabled) 1.0f else 0.4f
-            btnLoop.alpha = if (btnLoop.isEnabled) 1.0f else 0.4f
+
+            // Stop: visible only during active states
+            btnStop.visibility = if (active) View.VISIBLE else View.GONE
         }
     }
 
@@ -697,7 +637,7 @@ class OverlayService : Service() {
     private fun createNotification(): Notification {
         val statusText = when {
             isRecording -> "🔴 Recording…"
-            isPlaying -> "▶️ Playing…" + if (loopEnabled) " (Loop)" else ""
+            isPlaying -> "▶️ Playing…"
             else -> getString(R.string.notification_content)
         }
 
@@ -717,10 +657,6 @@ class OverlayService : Service() {
             val recordIntent = Intent(this, OverlayService::class.java).apply { action = ACTION_RECORD }
             val recordPI = PendingIntent.getService(this, 1, recordIntent, PendingIntent.FLAG_IMMUTABLE)
             builder.addAction(android.R.drawable.ic_btn_speak_now, "Record", recordPI)
-
-            val playIntent = Intent(this, OverlayService::class.java).apply { action = ACTION_PLAY }
-            val playPI = PendingIntent.getService(this, 2, playIntent, PendingIntent.FLAG_IMMUTABLE)
-            builder.addAction(android.R.drawable.ic_media_play, "Play", playPI)
         }
 
         return builder.build()

@@ -35,6 +35,11 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".MacroConfigActivity"
+            android:exported="false"
+            android:theme="@style/Theme.MacroEngine" />
+
         <service
             android:name=".OverlayService"
             android:exported="false"

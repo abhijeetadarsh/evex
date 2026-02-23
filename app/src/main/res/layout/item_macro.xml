@@ -43,15 +43,24 @@
 
         </LinearLayout>
 
-        <!-- Play Button -->
+        <!-- Activate Toggle -->
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/switchActivate"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            app:thumbTint="@color/accent_primary"
+            app:trackTint="@color/text_muted" />
+
+        <!-- Config Button -->
         <ImageButton
-            android:id="@+id/btnItemPlay"
+            android:id="@+id/btnItemConfig"
             android:layout_width="40dp"
             android:layout_height="40dp"
+            android:layout_marginStart="4dp"
             android:background="?attr/selectableItemBackgroundBorderless"
-            android:src="@drawable/ic_play"
-            android:contentDescription="@string/play"
-            app:tint="@color/accent_play" />
+            android:src="@drawable/ic_settings"
+            android:contentDescription="Settings"
+            app:tint="@color/text_secondary" />
 
         <!-- Delete Button -->
         <ImageButton
